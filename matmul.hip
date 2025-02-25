@@ -2591,10 +2591,10 @@ class MmtKernel_256t_MSxNS_amdgcn_mfma_i32_16x16x32i8_shared_Kx2_pipeline_v3_int
         __builtin_amdgcn_global_load_lds(&A_global[i * num_threads + tid], &A_shared[i * num_threads + tid], 4, 12, 0);
       }
       for (int j = 0; j < B_tile_size_in_vec16 / num_threads; ++j) {
-        __builtin_amdgcn_global_load_lds(&B_global[i * num_threads + tid], &B_shared[i * num_threads + tid], 4, 0, 0);
-        __builtin_amdgcn_global_load_lds(&B_global[i * num_threads + tid], &B_shared[i * num_threads + tid], 4, 4, 0);
-        __builtin_amdgcn_global_load_lds(&B_global[i * num_threads + tid], &B_shared[i * num_threads + tid], 4, 8, 0);
-        __builtin_amdgcn_global_load_lds(&B_global[i * num_threads + tid], &B_shared[i * num_threads + tid], 4, 12, 0);
+        __builtin_amdgcn_global_load_lds(&B_global[j * num_threads + tid], &B_shared[j * num_threads + tid], 4, 0, 0);
+        __builtin_amdgcn_global_load_lds(&B_global[j * num_threads + tid], &B_shared[j * num_threads + tid], 4, 4, 0);
+        __builtin_amdgcn_global_load_lds(&B_global[j * num_threads + tid], &B_shared[j * num_threads + tid], 4, 8, 0);
+        __builtin_amdgcn_global_load_lds(&B_global[j * num_threads + tid], &B_shared[j * num_threads + tid], 4, 12, 0);
       }
       A_global += A_tile_size_in_vec16;
       B_global += B_tile_size_in_vec16;
