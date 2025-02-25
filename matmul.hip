@@ -2583,6 +2583,26 @@ class MmtKernel_256t_MSxNS_amdgcn_mfma_i32_16x16x32i8_shared_Kx2_pipeline_v3_int
     int64x2_t A_block_vgpr1[MS];
     int64x2_t B_block_vgpr1[NS/2];
 
+    auto global_to_vgpr0 = [&]() {
+      for (int i = 0; i < A_tile_size_in_vec16 / num_threads; ++i) {
+        A_vgpr0[i] = A_global[i * num_threads + tid];
+      }
+      for (int j = 0; j < B_tile_size_in_vec16 / num_threads; ++j) {
+        B_vgpr0[j] = B_global[j * num_threads + tid];
+      }
+      A_global += A_tile_size_in_vec16;
+      B_global += B_tile_size_in_vec16;
+    };
+
+    auto vpgr0_to_shared = [&]() {
+      for (int i = 0; i < A_tile_size_in_vec16 / num_threads; ++i) {
+        A_shared[i * num_threads + tid] = A_vgpr0[i];
+      }
+      for (int j = 0; j < B_tile_size_in_vec16 / num_threads; ++j) {
+        B_shared[j * num_threads + tid] = B_vgpr0[j];
+      }
+    };
+
     auto global_to_shared = [&]() {
       for (int i = 0; i < A_tile_size_in_vec16 / num_threads; ++i) {
         __builtin_amdgcn_global_load_lds(&A_global[i * num_threads + tid], &A_shared[i * num_threads + tid], 4, 0, 0);
