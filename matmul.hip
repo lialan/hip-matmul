@@ -2598,7 +2598,7 @@ class MmtKernel_256t_MSxNS_amdgcn_mfma_i32_16x16x32i8_shared_Kx2_pipeline_v3_int
       }
       A_global += A_tile_size_in_vec16;
       B_global += B_tile_size_in_vec16;
-    }
+    };
 
     auto shared_to_vgpr = [&]() {
       for (int i = 0; i < MS; ++i)
