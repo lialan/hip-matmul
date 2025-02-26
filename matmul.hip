@@ -2722,18 +2722,6 @@ class MmtKernel_256t_MSxNS_amdgcn_mfma_i32_16x16x32i8_shared_Kx2_pipeline_v3_int
     int64x2_t A_vgpr0[A_tile_size_in_vec16 / num_threads];
     int64x2_t B_vgpr0[B_tile_size_in_vec16 / num_threads];
 
-    int64x2_t A_block_vgpr1[MS];
-    int64x2_t B_block_vgpr1[NS/2];
-
-    auto vpgr0_to_shared = [&]() {
-      for (int i = 0; i < A_tile_size_in_vec16 / num_threads; ++i) {
-        A_shared[i * num_threads + tid] = A_vgpr0[i];
-      }
-      for (int j = 0; j < B_tile_size_in_vec16 / num_threads; ++j) {
-        B_shared[j * num_threads + tid] = B_vgpr0[j];
-      }
-    };
-
     auto global_to_shared = [&]() {
       for (int i = 0; i < A_tile_size_in_vec16 / num_threads; ++i) {
         __builtin_amdgcn_global_load_lds(&A_global[i * num_threads + tid], &A_shared[i * num_threads + tid], 4, 0, 0);
@@ -2751,45 +2739,28 @@ class MmtKernel_256t_MSxNS_amdgcn_mfma_i32_16x16x32i8_shared_Kx2_pipeline_v3_int
       B_global += B_tile_size_in_vec16;
     };
 
-    auto shared_to_vgpr = [&]() {
-      for (int i = 0; i < MS; ++i)
-        A_block_vgpr1[i] = A_shared[64 * i + (tid % 64)];
-      for (int j = 0; j < NS / 4; ++j)
-        B_block_vgpr1[j] = B_shared[256 * j + tid];
-    };
-
     auto mfma = [&]() {
       for (int i = 0; i < MS; ++i) {
         for (int j = 0; j < NS / 4; ++j) {
           for (int k = 0; k < 2; ++k) {
             acc[i][j] = __builtin_amdgcn_mfma_i32_16x16x32_i8(
-                A_block_vgpr1[i][k], B_block_vgpr1[j][k], acc[i][j], 0, 0, 0);
+                A_shared[64 * i + (tid % 64)][k], B_shared[256 * j + tid][k],
+                acc[i][j], 0, 0, 0);
           }
         }
       }
     };
 
     auto sync = [] {
-      __builtin_amdgcn_s_barrier();
+      __syncthreads();
     };
 
-    global_to_shared();
-    if (K_outer >= 2) {
+    for (int iter = 0; iter < k_outer; ++k_outer) {
       global_to_shared();
       sync();
-      for (int k_outer = 0; k_outer < K_outer - 2; ++k_outer) {
-        global_to_shared();
-        mfma();
-        sync();
-        shared_to_vgpr();
-      }
-      sync();
-      vpgr0_to_shared();
       mfma();
+      sync();
     }
-    sync();
-    shared_to_vgpr();
-    mfma();
 
     int32x4_t *C_ptr = static_cast<int32x4_t *>(C_data) +
                        MS * NS * 16 * 4 * (N_outer * m_outer + n_outer);
