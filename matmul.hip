@@ -2755,7 +2755,7 @@ class MmtKernel_256t_MSxNS_amdgcn_mfma_i32_16x16x32i8_shared_Kx2_pipeline_v3_int
       __syncthreads();
     };
 
-    for (int iter = 0; iter < K_outer; ++k_outer) {
+    for (int iter = 0; iter < K_outer; ++K_outer) {
       global_to_shared();
       sync();
       mfma();
