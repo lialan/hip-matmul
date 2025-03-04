@@ -14,17 +14,24 @@
 #include <vector>
 
 template<size_t size>
-static void shared_memcpy(void* global, __shared__ void * shared) {
-  static_assert(size % 4 == 0);
-  static_assert(size == 16);
+static __device__ void shared_memcpy(void* global, __shared__ void * shared) {
+  static_assert(size % 4 == 0 && size <= 32);
 
-  __builtin_amdgcn_global_load_lds(&global, &shared, 4, 0, 0);
+  __builtin_amdgcn_global_load_lds(global, shared, 4, 0, 0);
   if constexpr (size > 4)
-    __builtin_amdgcn_global_load_lds(&global, &shared, 4, 4, 0);
+    __builtin_amdgcn_global_load_lds(global, shared, 4, 4, 0);
   if constexpr (size > 8)
-  __builtin_amdgcn_global_load_lds(&global, &shared, 4, 8, 0);
+    __builtin_amdgcn_global_load_lds(global, shared, 4, 8, 0);
   if constexpr (size > 12)
-  __builtin_amdgcn_global_load_lds(&global, &shared, 4, 12, 0);
+    __builtin_amdgcn_global_load_lds(global, shared, 4, 12, 0);
+  if constexpr (size > 16)
+    __builtin_amdgcn_global_load_lds(global, shared, 4, 16, 0);
+  if constexpr (size > 20)
+    __builtin_amdgcn_global_load_lds(global, shared, 4, 20, 0);
+  if constexpr (size > 24)
+    __builtin_amdgcn_global_load_lds(global, shared, 4, 24, 0);
+  if constexpr (size > 28)
+    __builtin_amdgcn_global_load_lds(global, shared, 4, 28, 0);
 } 
 
 void hip_check_impl(hipError_t hip_error_code, const char *condstr,
@@ -159,6 +166,7 @@ void checkMmtResults(const void *A_data_void, const void *B_data_void,
   const TA *A_data = static_cast<const TA *>(A_data_void);
   const TB *B_data = static_cast<const TB *>(B_data_void);
   const TC *C_data = static_cast<const TC *>(C_data_void);
+  size_t count = 0;
   // This reference code is slow. To make the checks not too slow on
   // large matmuls, we only check the 4 corner tiles.
   for (int m_outer : {0, s.M_outer - 1}) {
@@ -179,6 +187,7 @@ void checkMmtResults(const void *A_data_void, const void *B_data_void,
           TC actual =
               C_data[offset(C_shape(s), m_outer, n_outer, m_tile, n_tile)];
           if (actual != expected) {
+            fprintf(stderr, "count = %ld\n", count);
             fprintf(stderr,
                     "matmul numerical error: actual(%g) != "
                     "expected(%g), at m_outer=%d n_outer=%d m_tile=%d "
@@ -188,6 +197,7 @@ void checkMmtResults(const void *A_data_void, const void *B_data_void,
                     s.M_outer, s.N_outer, s.K_outer);
             abort();
           }
+          count += 1;
         }
       }
     }
@@ -2672,123 +2682,6 @@ class MmtKernel_256t_MSxNS_amdgcn_mfma_i32_16x16x32i8_shared_Kx2_pipeline_v3
 };
 
 template <int MS, int NS>
-class MmtKernel_256t_MSxNS_amdgcn_mfma_i32_16x16x32i8_shared_Kx2_pipeline_v3_intrinsic
-    : public MmtKernel {
-  static_assert(MS >= 4 && !(MS % 4));
-  static_assert(NS >= 4 && !(NS % 4));
-  virtual Type A_type() const override { return Type::SI8; }
-  virtual Type B_type() const override { return Type::SI8; }
-  virtual Type C_type() const override { return Type::SI32; }
-  virtual int M_tile() const override { return MS * 16; }
-  virtual int N_tile() const override { return NS * 16; }
-  virtual int K_tile() const override { return 64; }
-  virtual tile_layout_func_t A_tile_layout() const override {
-    return [](int m, int k) {
-      int mi = m % 16;
-      int mo = m / 16;
-      return 1024 * mo + 256 * ((k % 32) / 8) + 16 * mi + 8 * (k / 32) +
-             (k % 8);
-    };
-  }
-  virtual tile_layout_func_t B_tile_layout() const override {
-    return [](int n, int k) {
-      int ni = n % 16;
-      int no = n / 16;
-      return 1024 * no + 256 * ((k % 32) / 8) + 16 * ni + 8 * (k / 32) +
-             (k % 8);
-    };
-  }
-  virtual tile_layout_func_t C_tile_layout() const override {
-    return [](int m, int n) {
-      int mi = m % 16;
-      int mo = m / 16;
-      int ni = n % 16;
-      int no = n / 16;
-      return NS * 256 * mo + 256 * no + 4 * (16 * (mi / 4) + ni) + (mi % 4);
-    };
-  }
-  virtual int num_threads() const override { return 256; }
-  virtual mmt_func_t mmt_func() const override { return run; };
-  __global__ __launch_bounds__(256) static void run(const void *A_data,
-                                                    const void *B_data,
-                                                    void *C_data, int N_outer,
-                                                    int K_outer) {
-    using int64x2_t = __attribute__((__vector_size__(8 * 2))) int64_t;
-    using int32x4_t = __attribute__((__vector_size__(4 * 4))) int32_t;
-    int32x4_t acc[MS][NS / 4] = {{0}};
-
-    int m_outer = blockIdx.x;
-    int n_outer = blockIdx.y;
-    int tid = threadIdx.x;
-
-    constexpr int A_tile_size_in_vec16 = MS * 16 * 4;
-    constexpr int B_tile_size_in_vec16 = NS * 16 * 4;
-    constexpr int num_threads = 256;
-
-    const int64x2_t *A_global = static_cast<const int64x2_t *>(A_data) +
-                                m_outer * K_outer * A_tile_size_in_vec16;
-    const int64x2_t *B_global = static_cast<const int64x2_t *>(B_data) +
-                                n_outer * K_outer * B_tile_size_in_vec16;
-
-    __shared__ int64x2_t A_shared[A_tile_size_in_vec16];
-    __shared__ int64x2_t B_shared[B_tile_size_in_vec16];
-
-    int64x2_t A_vgpr0[A_tile_size_in_vec16 / num_threads];
-    int64x2_t B_vgpr0[B_tile_size_in_vec16 / num_threads];
-
-    auto global_to_shared = [&]() {
-      for (int i = 0; i < A_tile_size_in_vec16 / num_threads; ++i) {
-        //__builtin_amdgcn_global_load_lds(&A_global[i * num_threads + tid], &A_shared[i * num_threads + tid], 4, 0, 0);
-        //__builtin_amdgcn_global_load_lds(&A_global[i * num_threads + tid], &A_shared[i * num_threads + tid], 4, 4, 0);
-        //__builtin_amdgcn_global_load_lds(&A_global[i * num_threads + tid], &A_shared[i * num_threads + tid], 4, 8, 0);
-        //__builtin_amdgcn_global_load_lds(&A_global[i * num_threads + tid], &A_shared[i * num_threads + tid], 4, 12, 0);
-        shared_memcpy(&A_global[i * num_threads + tid], &A_shared[i * num_threads + tid], sizeof(int64x2_t));
-      }
-      for (int j = 0; j < B_tile_size_in_vec16 / num_threads; ++j) {
-        //__builtin_amdgcn_global_load_lds(&B_global[j * num_threads + tid], &B_shared[j * num_threads + tid], 4, 0, 0);
-        //__builtin_amdgcn_global_load_lds(&B_global[j * num_threads + tid], &B_shared[j * num_threads + tid], 4, 4, 0);
-        //__builtin_amdgcn_global_load_lds(&B_global[j * num_threads + tid], &B_shared[j * num_threads + tid], 4, 8, 0);
-        //__builtin_amdgcn_global_load_lds(&B_global[j * num_threads + tid], &B_shared[j * num_threads + tid], 4, 12, 0);
-        shared_memcpy(&B_global[i * num_threads + tid], &B_shared[i * num_threads + tid], sizeof(int64x2_t));
-      }
-      A_global += A_tile_size_in_vec16;
-      B_global += B_tile_size_in_vec16;
-    };
-
-    auto mfma = [&]() {
-      for (int i = 0; i < MS; ++i) {
-        for (int j = 0; j < NS / 4; ++j) {
-          for (int k = 0; k < 2; ++k) {
-            acc[i][j] = __builtin_amdgcn_mfma_i32_16x16x32_i8(
-                A_shared[64 * i + (tid % 64)][k], B_shared[256 * j + tid][k],
-                acc[i][j], 0, 0, 0);
-          }
-        }
-      }
-    };
-
-    auto sync = [] {
-      __syncthreads();
-    };
-
-    for (int iter = 0; iter < K_outer; ++K_outer) {
-      global_to_shared();
-      sync();
-      mfma();
-      sync();
-    }
-
-    int32x4_t *C_ptr = static_cast<int32x4_t *>(C_data) +
-                       MS * NS * 16 * 4 * (N_outer * m_outer + n_outer);
-    for (int i = 0; i < MS; ++i) {
-      for (int j = 0; j < NS / 4; ++j) {
-        C_ptr[256 * (NS / 4 * i + j) + tid] = acc[i][j];
-      }
-    }
-  }
-};
-
-template <int MS, int NS>
 class MmtKernel_256t_MSxNS_amdgcn_mfma_f32_16x16x4f32_shared_intrinsic
     : public MmtKernel {
   static_assert(MS >= 4 && !(MS % 4));
@@ -2862,18 +2755,18 @@ class MmtKernel_256t_MSxNS_amdgcn_mfma_f32_16x16x4f32_shared_intrinsic
              ++k_outer_shared) {
           for (int i = 0; i < A_tile_size; i += 256) {
             //A_shared_ptr[i] = A_global_ptr[i];
-            //__builtin_amdgcn_global_load_lds(&A_global_ptr[i], &A_shared_ptr[i], 4, 0, 0);
-            shared_memcpy(A_global_ptr, A_shared_ptr, 4);
-          }
-          for (int j = 0; j < B_tile_size; j += 256) {
-            //B_shared_ptr[j] = B_global_ptr[j];
-            //__builtin_amdgcn_global_load_lds(&B_global_ptr[j], &B_shared_ptr[j], 4, 0, 0);
-            shared_memcpy(B_global_ptr, B_shared_ptr, 4);
+            shared_memcpy<sizeof(float)>((void*)(A_global_ptr + i), (void*)(A_shared_ptr + i));
           }
           A_shared_ptr += A_tile_size;
-          B_shared_ptr += B_tile_size;
           A_global_ptr += A_tile_size;
+          __syncthreads();
+          for (int j = 0; j < B_tile_size; j += 256) {
+            //B_shared_ptr[j] = B_global_ptr[j];
+            shared_memcpy<sizeof(float)>((void*)(B_global_ptr + j), (void*)(B_shared_ptr + j));
+          }
+          B_shared_ptr += B_tile_size;
           B_global_ptr += B_tile_size;
+          __syncthreads();
         }
       }
       __syncthreads();
@@ -2907,18 +2800,19 @@ class MmtKernel_256t_MSxNS_amdgcn_mfma_f32_16x16x4f32_shared_intrinsic
              ++k_outer_shared) {
           for (int i = 0; i < A_tile_size; i += 256) {
             //A_shared_ptr[i] = A_global_ptr[i];
-            //__builtin_amdgcn_global_load_lds(&A_global_ptr[i], &A_shared_ptr[i], 4, 0, 0);
-            shared_memcpy(A_global_ptr, A_shared_ptr, 4);
-          }
-          for (int j = 0; j < B_tile_size; j += 256) {
-            //B_shared_ptr[j] = B_global_ptr[j];
-            //__builtin_amdgcn_global_load_lds(&B_global_ptr[j], &B_shared_ptr[j], 4, 0, 0);
-            shared_memcpy(B_global_ptr, B_shared_ptr, 4);
+            shared_memcpy<sizeof(float)>((void*)(A_global_ptr + i), (void*)(A_shared_ptr + i));
           }
           A_shared_ptr += A_tile_size;
-          B_shared_ptr += B_tile_size;
           A_global_ptr += A_tile_size;
+          __syncthreads();
+
+          for (int j = 0; j < B_tile_size; j += 256) {
+            //B_shared_ptr[j] = B_global_ptr[j];
+            shared_memcpy<sizeof(float)>((void*)(B_global_ptr + j), (void*)(B_shared_ptr + j));
+          }
+          B_shared_ptr += B_tile_size;
           B_global_ptr += B_tile_size;
+          __syncthreads();
         }
       }
       __syncthreads();
@@ -2952,9 +2846,9 @@ class MmtKernel_256t_MSxNS_amdgcn_mfma_f32_16x16x4f32_shared_intrinsic
   }
 };
 
-
 int main() {
   std::printf("Best-performing kernels for each element types:\n\n");
+/*
   test(MmtKernel_256t_MSxNS_amdgcn_mfma_i32_16x16x32i8_shared_Kx2_pipeline_v3<
        8, 8>());
   test(MmtKernel_256t_MSxNS_amdgcn_mfma_i32_16x16x32i8_shared_Kx2_pipelineload<
@@ -3010,8 +2904,16 @@ int main() {
   test(MmtKernel_256t_MSxNS_amdgcn_mfma_i32_16x16x32i8_shared_Kx2<8, 8>());
   test(MmtKernel_256t_MSxNS_amdgcn_mfma_i32_16x16x32i8_shared_Kx2_pipelineload<
        8, 8>());
-  test(
-      MmtKernel_256t_MSxNS_amdgcn_mfma_i32_16x16x32i8_shared_Kx2_pipeline_v3_intrinsic<
-          8, 8>());
+*/
+  //test(
+  //    MmtKernel_256t_MSxNS_amdgcn_mfma_i32_16x16x32i8_shared_Kx2_pipeline_v3_intrinsic<
+  //        4, 4>());
+  test(MmtKernel_256t_MSxNS_amdgcn_mfma_f32_16x16x4f32_shared<4, 4>());
+  test(MmtKernel_256t_MSxNS_amdgcn_mfma_f32_16x16x4f32_shared_intrinsic<4, 4>());
+  printf("\n");
+  test(MmtKernel_256t_MSxNS_amdgcn_mfma_f32_16x16x4f32_shared<8, 8>());
   test(MmtKernel_256t_MSxNS_amdgcn_mfma_f32_16x16x4f32_shared_intrinsic<8, 8>());
+  printf("\n");
+  test(MmtKernel_256t_MSxNS_amdgcn_mfma_f32_16x16x4f32_shared<16, 16>());
+  test(MmtKernel_256t_MSxNS_amdgcn_mfma_f32_16x16x4f32_shared_intrinsic<16, 16>());
 }
