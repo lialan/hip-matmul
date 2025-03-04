@@ -13,6 +13,20 @@
 #include <typeinfo>
 #include <vector>
 
+template<size_t size>
+static void shared_memcpy(void* global, __shared__ void * shared) {
+  static_assert(size % 4 == 0);
+  static_assert(size == 16);
+
+  __builtin_amdgcn_global_load_lds(&global, &shared, 4, 0, 0);
+  if constexpr (size > 4)
+    __builtin_amdgcn_global_load_lds(&global, &shared, 4, 4, 0);
+  if constexpr (size > 8)
+  __builtin_amdgcn_global_load_lds(&global, &shared, 4, 8, 0);
+  if constexpr (size > 12)
+  __builtin_amdgcn_global_load_lds(&global, &shared, 4, 12, 0);
+} 
+
 void hip_check_impl(hipError_t hip_error_code, const char *condstr,
                     const char *file, int line) {
   if (hip_error_code != hipSuccess) {
@@ -2724,16 +2738,18 @@ class MmtKernel_256t_MSxNS_amdgcn_mfma_i32_16x16x32i8_shared_Kx2_pipeline_v3_int
 
     auto global_to_shared = [&]() {
       for (int i = 0; i < A_tile_size_in_vec16 / num_threads; ++i) {
-        __builtin_amdgcn_global_load_lds(&A_global[i * num_threads + tid], &A_shared[i * num_threads + tid], 4, 0, 0);
-        __builtin_amdgcn_global_load_lds(&A_global[i * num_threads + tid], &A_shared[i * num_threads + tid], 4, 4, 0);
-        __builtin_amdgcn_global_load_lds(&A_global[i * num_threads + tid], &A_shared[i * num_threads + tid], 4, 8, 0);
-        __builtin_amdgcn_global_load_lds(&A_global[i * num_threads + tid], &A_shared[i * num_threads + tid], 4, 12, 0);
+        //__builtin_amdgcn_global_load_lds(&A_global[i * num_threads + tid], &A_shared[i * num_threads + tid], 4, 0, 0);
+        //__builtin_amdgcn_global_load_lds(&A_global[i * num_threads + tid], &A_shared[i * num_threads + tid], 4, 4, 0);
+        //__builtin_amdgcn_global_load_lds(&A_global[i * num_threads + tid], &A_shared[i * num_threads + tid], 4, 8, 0);
+        //__builtin_amdgcn_global_load_lds(&A_global[i * num_threads + tid], &A_shared[i * num_threads + tid], 4, 12, 0);
+        shared_memcpy(&A_global[i * num_threads + tid], &A_shared[i * num_threads + tid], sizeof(int64x2_t));
       }
       for (int j = 0; j < B_tile_size_in_vec16 / num_threads; ++j) {
-        __builtin_amdgcn_global_load_lds(&B_global[j * num_threads + tid], &B_shared[j * num_threads + tid], 4, 0, 0);
-        __builtin_amdgcn_global_load_lds(&B_global[j * num_threads + tid], &B_shared[j * num_threads + tid], 4, 4, 0);
-        __builtin_amdgcn_global_load_lds(&B_global[j * num_threads + tid], &B_shared[j * num_threads + tid], 4, 8, 0);
-        __builtin_amdgcn_global_load_lds(&B_global[j * num_threads + tid], &B_shared[j * num_threads + tid], 4, 12, 0);
+        //__builtin_amdgcn_global_load_lds(&B_global[j * num_threads + tid], &B_shared[j * num_threads + tid], 4, 0, 0);
+        //__builtin_amdgcn_global_load_lds(&B_global[j * num_threads + tid], &B_shared[j * num_threads + tid], 4, 4, 0);
+        //__builtin_amdgcn_global_load_lds(&B_global[j * num_threads + tid], &B_shared[j * num_threads + tid], 4, 8, 0);
+        //__builtin_amdgcn_global_load_lds(&B_global[j * num_threads + tid], &B_shared[j * num_threads + tid], 4, 12, 0);
+        shared_memcpy(&B_global[i * num_threads + tid], &B_shared[i * num_threads + tid], sizeof(int64x2_t));
       }
       A_global += A_tile_size_in_vec16;
       B_global += B_tile_size_in_vec16;
@@ -2846,11 +2862,13 @@ class MmtKernel_256t_MSxNS_amdgcn_mfma_f32_16x16x4f32_shared_intrinsic
              ++k_outer_shared) {
           for (int i = 0; i < A_tile_size; i += 256) {
             //A_shared_ptr[i] = A_global_ptr[i];
-            __builtin_amdgcn_global_load_lds(&A_global_ptr[i], &A_shared_ptr[i], 4, 0, 0);
+            //__builtin_amdgcn_global_load_lds(&A_global_ptr[i], &A_shared_ptr[i], 4, 0, 0);
+            shared_memcpy(A_global_ptr, A_shared_ptr, 4);
           }
           for (int j = 0; j < B_tile_size; j += 256) {
             //B_shared_ptr[j] = B_global_ptr[j];
-            __builtin_amdgcn_global_load_lds(&B_global_ptr[j], &B_shared_ptr[j], 4, 0, 0);
+            //__builtin_amdgcn_global_load_lds(&B_global_ptr[j], &B_shared_ptr[j], 4, 0, 0);
+            shared_memcpy(B_global_ptr, B_shared_ptr, 4);
           }
           A_shared_ptr += A_tile_size;
           B_shared_ptr += B_tile_size;
@@ -2889,11 +2907,13 @@ class MmtKernel_256t_MSxNS_amdgcn_mfma_f32_16x16x4f32_shared_intrinsic
              ++k_outer_shared) {
           for (int i = 0; i < A_tile_size; i += 256) {
             //A_shared_ptr[i] = A_global_ptr[i];
-            __builtin_amdgcn_global_load_lds(&A_global_ptr[i], &A_shared_ptr[i], 4, 0, 0);
+            //__builtin_amdgcn_global_load_lds(&A_global_ptr[i], &A_shared_ptr[i], 4, 0, 0);
+            shared_memcpy(A_global_ptr, A_shared_ptr, 4);
           }
           for (int j = 0; j < B_tile_size; j += 256) {
             //B_shared_ptr[j] = B_global_ptr[j];
-            __builtin_amdgcn_global_load_lds(&B_global_ptr[j], &B_shared_ptr[j], 4, 0, 0);
+            //__builtin_amdgcn_global_load_lds(&B_global_ptr[j], &B_shared_ptr[j], 4, 0, 0);
+            shared_memcpy(B_global_ptr, B_shared_ptr, 4);
           }
           A_shared_ptr += A_tile_size;
           B_shared_ptr += B_tile_size;
@@ -2931,6 +2951,7 @@ class MmtKernel_256t_MSxNS_amdgcn_mfma_f32_16x16x4f32_shared_intrinsic
     }
   }
 };
+
 
 int main() {
   std::printf("Best-performing kernels for each element types:\n\n");
