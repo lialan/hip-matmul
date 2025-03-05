@@ -27,27 +27,6 @@ static __device__ void shared_memcpy(__shared__ void* shared, __shared__ void *g
   return;
 } 
 
-template<size_t size>
-static __device__ void shared_memcpy_2(void* global, __shared__ void * shared) {
-  static_assert(size % 4 == 0 && size <= 32);
-
-  __builtin_amdgcn_global_load_lds(global, shared, 4, 0, 0);
-  if constexpr (size > 4)
-    __builtin_amdgcn_global_load_lds(global, shared, 4, 4, 0);
-  if constexpr (size > 8)
-    __builtin_amdgcn_global_load_lds(global, shared, 4, 8, 0);
-  if constexpr (size > 12)
-    __builtin_amdgcn_global_load_lds(global, shared, 4, 12, 0);
-  if constexpr (size > 16)
-    __builtin_amdgcn_global_load_lds(global, shared, 4, 16, 0);
-  if constexpr (size > 20)
-    __builtin_amdgcn_global_load_lds(global, shared, 4, 20, 0);
-  if constexpr (size > 24)
-    __builtin_amdgcn_global_load_lds(global, shared, 4, 24, 0);
-  if constexpr (size > 28)
-    __builtin_amdgcn_global_load_lds(global, shared, 4, 28, 0);
-} 
-
 void hip_check_impl(hipError_t hip_error_code, const char *condstr,
                     const char *file, int line) {
   if (hip_error_code != hipSuccess) {
@@ -193,7 +172,6 @@ void checkMmtResults(const void *A_data_void, const void *B_data_void,
   const TA *A_data = static_cast<const TA *>(A_data_void);
   const TB *B_data = static_cast<const TB *>(B_data_void);
   const TC *C_data = static_cast<const TC *>(C_data_void);
-  size_t count = 0;
   // This reference code is slow. To make the checks not too slow on
   // large matmuls, we only check the 4 corner tiles.
   for (int m_outer : {0, s.M_outer - 1}) {
@@ -214,7 +192,6 @@ void checkMmtResults(const void *A_data_void, const void *B_data_void,
           TC actual =
               C_data[offset(C_shape(s), m_outer, n_outer, m_tile, n_tile)];
           if (actual != expected) {
-            fprintf(stderr, "count = %ld\n", count);
             fprintf(stderr,
                     "matmul numerical error: actual(%g) != "
                     "expected(%g), at m_outer=%d n_outer=%d m_tile=%d "
@@ -224,7 +201,6 @@ void checkMmtResults(const void *A_data_void, const void *B_data_void,
                     s.M_outer, s.N_outer, s.K_outer);
             abort();
           }
-          count += 1;
         }
       }
     }
@@ -2026,102 +2002,6 @@ class MmtKernel_256t_MSxNS_amdgcn_mfma_f32_16x16x16f16_shared
       for (int j = 0; j < B_tile_size_in_vec4; j += 256) {
         B_shared[j + tid] = B_global_ptr[j];
       }
-      A_global_ptr += A_tile_size_in_vec4;
-      B_global_ptr += B_tile_size_in_vec4;
-      __syncthreads();
-
-      for (int i = 0; i < MS; ++i) {
-        for (int j = 0; j < NS / 4; ++j) {
-          acc[i][j] = __builtin_amdgcn_mfma_f32_16x16x16f16(
-              A_shared[64 * i + (tid % 64)], B_shared[256 * j + tid], acc[i][j],
-              0, 0, 0);
-        }
-      }
-      __syncthreads();
-    }
-
-    floatx4_t *C_ptr = static_cast<floatx4_t *>(C_data) +
-                       MS * NS * 16 * 4 * (N_outer * m_outer + n_outer);
-    for (int i = 0; i < MS; ++i) {
-      for (int j = 0; j < NS / 4; ++j) {
-        C_ptr[256 * (NS / 4 * i + j) + tid] = acc[i][j];
-      }
-    }
-  }
-};
-
-template <int MS, int NS>
-class MmtKernel_256t_MSxNS_amdgcn_mfma_f32_16x16x16f16_shared_intrinsic
-    : public MmtKernel {
-  static_assert(MS >= 4 && !(MS % 4));
-  static_assert(NS >= 4 && !(NS % 4));
-  virtual Type A_type() const override { return Type::FP16; }
-  virtual Type B_type() const override { return Type::FP16; }
-  virtual Type C_type() const override { return Type::FP32; }
-  virtual int M_tile() const override { return MS * 16; }
-  virtual int N_tile() const override { return NS * 16; }
-  virtual int K_tile() const override { return 16; }
-  virtual tile_layout_func_t A_tile_layout() const override {
-    return [](int m, int k) {
-      int mi = m % 16;
-      int mo = m / 16;
-      return 256 * mo + 64 * (k / 4) + 4 * mi + (k % 4);
-    };
-  }
-  virtual tile_layout_func_t B_tile_layout() const override {
-    return [](int n, int k) {
-      int ni = n % 16;
-      int no = n / 16;
-      return 256 * no + 64 * (k / 4) + 4 * ni + (k % 4);
-    };
-  }
-  virtual tile_layout_func_t C_tile_layout() const override {
-    return [](int m, int n) {
-      int mi = m % 16;
-      int mo = m / 16;
-      int ni = n % 16;
-      int no = n / 16;
-      return NS * 256 * mo + 256 * no + 64 * (mi / 4) + 4 * ni + (mi % 4);
-    };
-  }
-  virtual int num_threads() const override { return 256; }
-  virtual mmt_func_t mmt_func() const override { return run; };
-  __global__ __launch_bounds__(256) static void run(const void *A_data,
-                                                    const void *B_data,
-                                                    void *C_data, int N_outer,
-                                                    int K_outer) {
-    using float16x4_t =
-        __attribute__((__vector_size__(4 * sizeof(_Float16)))) _Float16;
-    using floatx4_t = __attribute__((__vector_size__(4 * sizeof(float)))) float;
-    floatx4_t acc[MS][NS / 4] = {{0}};
-
-    int m_outer = blockIdx.x;
-    int n_outer = blockIdx.y;
-    int tid = threadIdx.x;
-
-    constexpr int A_tile_size_in_vec4 = MS * 16 * 4;
-    constexpr int B_tile_size_in_vec4 = NS * 16 * 4;
-
-    const float16x4_t *A_global = static_cast<const float16x4_t *>(A_data) +
-                                  m_outer * K_outer * A_tile_size_in_vec4;
-    const float16x4_t *B_global = static_cast<const float16x4_t *>(B_data) +
-                                  n_outer * K_outer * B_tile_size_in_vec4;
-    const float16x4_t *A_global_ptr = A_global + tid;
-    const float16x4_t *B_global_ptr = B_global + tid;
-
-    __shared__ float16x4_t A_shared[A_tile_size_in_vec4];
-    __shared__ float16x4_t B_shared[B_tile_size_in_vec4];
-
-    for (int k_outer = 0; k_outer < K_outer; ++k_outer) {
-      for (int i = 0; i < A_tile_size_in_vec4; i += 256) {
-        //A_shared[i + tid] = A_global_ptr[i];
-        shared_memcpy_f16<4>((void*)(&A_global_ptr[i]), (void*)(&A_shared[i + tid]));
-      }
-      for (int j = 0; j < B_tile_size_in_vec4; j += 256) {
-        //B_shared[j + tid] = B_global_ptr[j];
-        shared_memcpy_f16<4>((void*)(&B_global_ptr[j]), (void*)(&B_shared[j + tid]));
-      }
-      __syncthreads();
       A_global_ptr += A_tile_size_in_vec4;
       B_global_ptr += B_tile_size_in_vec4;
       __syncthreads();
