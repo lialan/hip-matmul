@@ -24,8 +24,7 @@ static __device__ void shared_memcpy(__shared__ void* shared, __shared__ void *g
   for (size_t idx = 0; idx < size / 4; ++idx) {
     __builtin_amdgcn_global_load_lds(g + idx, s + idx, 4, 0, 0);
   }
-  return;
-} 
+}
 
 void hip_check_impl(hipError_t hip_error_code, const char *condstr,
                     const char *file, int line) {
@@ -118,19 +117,6 @@ template <> struct CTypeImpl<Type::SI32> { using type = int32_t; };
 template <> struct CTypeImpl<Type::FP16> { using type = _Float16; };
 template <> struct CTypeImpl<Type::FP32> { using type = float; };
 template <Type t> using CType = typename CTypeImpl<t>::type;
-
-template<size_t size_of_float16>
-static __device__ void shared_memcpy_f16(void* global, __shared__ void * shared) {
-  static_assert(sizeof(_Float16) == 2);
-
-  auto * g = reinterpret_cast<_Float16*>(global);
-  auto * s = reinterpret_cast<_Float16*>(shared);
-
-  for (size_t idx = 0; idx < size_of_float16; ++idx) {
-    __builtin_amdgcn_global_load_lds(g + idx, s + idx, 2, 0, 0);
-  }
-  return;
-} 
 
 template <Type type>
 void fillRandomBuffer(int size, std::minstd_rand &r, void *out_buffer) {
