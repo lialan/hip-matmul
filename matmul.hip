@@ -2662,10 +2662,8 @@ static __device__ void chunk_memcpy(__shared__ void* shared, void *global, size_
   uint8_t * g = reinterpret_cast<uint8_t*>(global);
   uint8_t * s = reinterpret_cast<uint8_t*>(shared);
 
-  assert(__AMDGCN_WAVEFRONT_SIZE == 64);
-  constexpr size_t lane_size = __AMDGCN_WAVEFRONT_SIZE;
-
-  constexpr size_t chunk_copy_size = 4 * lane_size;
+  const size_t lane_size = 64;
+  const size_t chunk_copy_size = 4 * lane_size;
   assert(size % chunk_copy_size == 0);
 
   auto lane = threadIdx.x % lane_size;
@@ -2744,19 +2742,9 @@ class MmtKernel_256t_MSxNS_amdgcn_mfma_i32_16x16x32i8_shared_Kx2_intrinsic
     __shared__ int64x2_t A_shared[A_tile_size_in_vec16];
     __shared__ int64x2_t B_shared[B_tile_size_in_vec16];
 
-    auto A_copy_size = sizeof(int64x2_t) * A_tile_size_in_vec16;
-    assert(A_copy_size % 256 == 0);
-    auto B_copy_size = sizeof(int64x2_t) * B_tile_size_in_vec16;
-    assert(B_copy_size % 256 == 0);
     for (int k_outer = 0; k_outer < K_outer; ++k_outer) {
-
-      for (int i = 0; i < A_tile_size_in_vec16; i += 256) {
-        chunk_memcpy((void*)(&A_shared[i]), (void*)(&A_global_ptr[i]), sizeof(int64x2_t) * 256);
-      }
-
-      for (int j = 0; j < B_tile_size_in_vec16; j += 256) {
-        chunk_memcpy((void*)(&B_shared[j]), (void*)(&B_global_ptr[j]), sizeof(int64x2_t) * 256);
-      }
+      chunk_memcpy((void*)(A_shared), (void*)(A_global_ptr), sizeof(int64x2_t) * A_tile_size_in_vec16);
+      chunk_memcpy((void*)(B_shared), (void*)(B_global_ptr), sizeof(int64x2_t) * B_tile_size_in_vec16);
 
       A_global_ptr += A_tile_size_in_vec16;
       B_global_ptr += B_tile_size_in_vec16;
